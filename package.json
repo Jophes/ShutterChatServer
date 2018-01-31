@@ -1,0 +1,16 @@
+{
+  "name": "ShutterChat",
+  "version": "0.0.0",
+  "description": "A remake of SnapChat",
+  "main": "index.js",
+  "author": "Jophes",
+  "private": true,
+  "dependencies": {
+    "mysql": "^2.13.0",
+    "googleapis": "^25.0.0",
+    "google-auth-library": "^1.2.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
