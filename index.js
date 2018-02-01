@@ -7,10 +7,9 @@ const client = new gal.OAuth2Client();
 var server = net.createServer(function(socket) {
     console.log('Connection made');
     socket.on('data', function(data) {
-        const ticket = client.verifyIdToken({idToken: data.toString(), audience: keys.nodejs.client_id}, function (err, ticket, res) {
+        const ticket = client.verifyIdToken({idToken: data.toString(), audience: keys.nodejs.client_id}, function (err, ticket) {
             console.log(err);
             console.log(ticket);
-            console.log(res);
         });
     });
 });
