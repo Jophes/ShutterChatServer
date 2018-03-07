@@ -67,6 +67,7 @@ const CODES = {
     REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
     PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
     LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, SUCCESS: 3 },
+    GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
 }
 
 function Login(email, password, callback) {
@@ -214,41 +215,125 @@ function ChangeName(email, name, callback) {
 
 }
 
+function GIdCheck(gId, callback) {
+    con.query('SELECT gId FROM s15409471.gUsers WHERE gUsers.gId = ?;', [gId], function(err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(false, err);
+        }
+        else {
+            if (rows.length > 0 && rows[0] != null && rows[0].gId == gId) {
+                callback(true);
+            }
+            else {
+                callback(false);
+            }
+        }
+    });
+}
+/*GIdCheck(51322, function(exists, err) {
+    if (err) {
+        console.log(err);
+    }
+    else {
+        console.log('gId: ' + 51322 + ' check returned: ' + exists);
+    }
+});*/
+
+function LinkGAccount(gId, email, callback) {
+    con.query('INSERT INTO gUsers (uId, gId) (SELECT Users.uId, ? FROM Users WHERE Users.email = ? LIMIT 0,1);', [gId, email], function(err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(err);
+        }
+        else {
+            console.log('gId: "' + gId + '" has been linked too: "' + email + '"');
+            callback();
+        }
+    });
+}
+
 function GLogin(gId, email, name, callback) {
     EmailCheck(email, function(exists, err) {
         if (err) {
             console.log(err);
+            callback({code: CODES.GLOGIN.FATAL_ERROR});
         }
         else {
             if (exists) {
-                con.query('SELECT gUsers.gId, email, password FROM s15409471.Users, s15409471.gUsers WHERE gUsers.uId = Users.uId AND gUsers.gId = ?;', [gId], function(err, rows, fields) {
+                con.query('SELECT gId, email, password FROM s15409471.Users, s15409471.gUsers WHERE gUsers.uId = Users.uId AND gUsers.gId = ?;', [gId], function(err, rows, fields) {
                     if (err) {
                         console.log(err);
+                        callback({code: CODES.GLOGIN.FATAL_ERROR, message: 'An error occured!'});
                     }
                     else {
-                        if (rows[0].gId == gId && rows[0].email == email) {
-                            // Email exists and matches gId in database, sign in complete
-                            console.log('Sign in complete');
+                        if (rows.length > 0 && rows[0] != null) {
+                            if (rows[0].gId == gId && rows[0].email == email) {
+                                // Email exists and matches gId in database, sign in complete
+                                console.log(gId + ':' + email + ' signed in');
+                                callback({code: CODES.GLOGIN.SUCCESS});
+                            }
+                            else {
+                                console.log('gId exists but does not match the email provided from Google');
+                                callback({code: CODES.GLOGIN.EMAIL_MISMATCH, message: 'Your Google Email does not match our records'});
+                            }
                         }
                         else {
                             // Email exists but no gId matches, link email to gId and ask for password to continue
-
+                            console.log('Link required');
+                            LinkGAccount(gId, email, function(err) {
+                                if (err) {
+                                    console.log(err);
+                                    callback({code: CODES.GLOGIN.FATAL_ERROR, message: 'An error occured!'});
+                                }
+                                else {
+                                    callback({code: CODES.GLOGIN.SUCCESS});
+                                }
+                            });
                         }
                     }
                 });
             }
             else {
-                // Email does not exist, register account and link to gId
-                Register(email, null, function(err) {
-                    console.log(err);
+                // Email does not exist, check to ensure the gId does not already exist
+                GIdCheck(gId, function(exists, err) {
+                    if (err) {
+                        console.log(err);
+                        callback({code: CODES.GLOGIN.FATAL_ERROR, message: 'An error occured!'});
+                    }
+                    else {
+                        if (exists) {
+                            console.log('gId: ' + gId + ' already exists');
+                            callback({code: CODES.GLOGIN.GID_EXISTS, message: 'Google Id already exists in our records'});
+                        }
+                        else {
+                            Register(email, null, function(err) {
+                                if (err.code == CODES.REGISTER.SUCCESS) {
+                                    // Link account
+                                    LinkGAccount(gId, email, function(err) {
+                                        if (err) {
+                                            callback({code: CODES.GLOGIN.FATAL_ERROR, message: 'An error occured!'});
+                                        }
+                                        else {
+                                            callback({code: CODES.GLOGIN.SUCCESS});
+                                        }
+                                    });
+                                }
+                                else {
+                                    console.log('Error attempting to auto register google account');
+                                    callback({code: CODES.GLOGIN.FATAL_ERROR, message: 'An error occured!'});
+                                }
+                            });
+                        }
+                    }
                 });
             }
         }
     });
 }
-GLogin(51321, 'test90', 'Fred', function() {
-
-});
+/*GLogin(51327, 'test97', 'Fred', function(err) {
+    console.log(err);
+});*/
 
 //console.log(JSON.stringify({type: 0, email: 'test10', password: 'Password1'}));
 
@@ -276,7 +361,7 @@ var server = net.createServer(function(socket) {
                     }
                     break;
                 case DATA_TYPES.REGISTER:
-                    if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password')) {
+                    if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password') && obj.password != null) {
                         Register(obj.email, obj.password, function(err) {
                             socket.write(JSON.stringify(err));
                         });
@@ -289,9 +374,18 @@ var server = net.createServer(function(socket) {
                     if (obj.hasOwnProperty('idToken')) {
                         client.verifyIdToken({idToken: obj.idToken, audience: keys.nodejs.client_id}, function (err, ticket) {
                             if (!err && ticket && ticket.hasOwnProperty('payload') && ticket.payload.hasOwnProperty('sub')) {
-                                console.log('Attempt login using google id: ' + ticket.payload.sub);
-                                console.log(ticket);
-                                
+                                if (ticket.payload.email_verified) {
+                                    //console.log('Attempt login using google id: ' + ticket.payload.sub);
+                                    //console.log(ticket);
+                                    GLogin(ticket.payload.sub, ticket.payload.email, ticket.payload.name, function(err) {
+                                        console.log(err);
+                                        socket.write(JSON.stringify(err));
+                                    });
+                                }
+                                else {
+                                    console.log('Email not verified, denied access');
+                                    socket.write(JSON.stringify({code: CODES.GLOGIN.VERIFY_FAIL, message: 'Google email is not verified, please verify before registering.'}));
+                                }
                             }
                         });
                     }
