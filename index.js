@@ -64,9 +64,10 @@ function EmailCheck(email, callback) {
 // EmailCheck('test2', function(exists, err) { console.log('email exists: ' + exists); });
 
 const CODES = {
+    RESPONDING: { REGISTER: 0, PASSWORD: 1, LOGIN: 2, GLOGIN: 3 },
     REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
     PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
-    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, SUCCESS: 3 },
+    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, GONLY: 3, SUCCESS: 4 },
     GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
 }
 
@@ -104,9 +105,8 @@ function Login(email, password, callback) {
                             });
                         }
                         else {
-                            console.log('Error, couldn\'t find password that should exist');
-                            console.log(rows);
-                            callback({code: CODES.LOGIN.FATAL_ERROR, message: 'An error occured!'});
+                            console.log('Account can only be accessed by Google Login');
+                            callback({code: CODES.LOGIN.GONLY, message: 'Account can only be accessed by Google Login'});
                         }
                     }
                 });
@@ -353,7 +353,9 @@ var server = net.createServer(function(socket) {
                 case DATA_TYPES.LOGIN:
                     if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password')) {
                         Login(obj.email, obj.password, function(err) {
-                            socket.write(JSON.stringify(err));
+                            err.responding = CODES.RESPONDING.LOGIN;
+                            console.log(err);
+                            socket.write(JSON.stringify(err)+"\n");
                         });
                     }
                     else {
@@ -363,7 +365,9 @@ var server = net.createServer(function(socket) {
                 case DATA_TYPES.REGISTER:
                     if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password') && obj.password != null) {
                         Register(obj.email, obj.password, function(err) {
-                            socket.write(JSON.stringify(err));
+                            err.responding = CODES.RESPONDING.REGISTER;
+                            console.log(err);
+                            socket.write(JSON.stringify(err)+"\n");
                         });
                     }
                     else {
@@ -378,13 +382,14 @@ var server = net.createServer(function(socket) {
                                     //console.log('Attempt login using google id: ' + ticket.payload.sub);
                                     //console.log(ticket);
                                     GLogin(ticket.payload.sub, ticket.payload.email, ticket.payload.name, function(err) {
+                                        err.responding = CODES.RESPONDING.GLOGIN;
                                         console.log(err);
-                                        socket.write(JSON.stringify(err));
+                                        socket.write(JSON.stringify(err)+"\n");
                                     });
                                 }
                                 else {
                                     console.log('Email not verified, denied access');
-                                    socket.write(JSON.stringify({code: CODES.GLOGIN.VERIFY_FAIL, message: 'Google email is not verified, please verify before registering.'}));
+                                    socket.write(JSON.stringify({respoding: CODES.RESPONDING.GLOGIN, code: CODES.GLOGIN.VERIFY_FAIL, message: 'Google email is not verified, please verify before registering.'})+"\n");
                                 }
                             }
                         });
