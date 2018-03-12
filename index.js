@@ -22,7 +22,7 @@ const gal = require('google-auth-library');
 const auth = new gal.GoogleAuth();
 const client = new gal.OAuth2Client();
 
-var DATA_TYPES = { LOGIN: 1, REGISTER: 2, GLOGIN: 3, CHAT: 4, GET_CHAT: 5 };
+var DATA_TYPES = { LOGIN: 1, REGISTER: 2, GLOGIN: 3, CHAT: 4, GET_CHAT: 5, TOKEN_AUTH: 7 };
 
 //console.log(JSON.stringify({ type: DATA_TYPES.LOGIN, username: 'Jophes', firstname: 'Joseph', lastname: 'Higgins' }));
 
@@ -62,14 +62,6 @@ function EmailCheck(email, callback) {
     });
 }
 // EmailCheck('test2', function(exists, err) { console.log('email exists: ' + exists); });
-
-const CODES = {
-    RESPONDING: { REGISTER: 0, PASSWORD: 1, LOGIN: 2, GLOGIN: 3 },
-    REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
-    PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
-    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, GONLY: 3, SUCCESS: 4 },
-    GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
-}
 
 function Login(email, password, callback) {
     EmailCheck(email, function(exists, err) {
@@ -337,6 +329,55 @@ function GLogin(gId, email, name, callback) {
 
 //console.log(JSON.stringify({type: 0, email: 'test10', password: 'Password1'}));
 
+const CODES = {
+    RESPONDING: { REGISTER: 0, PASSWORD: 1, LOGIN: 2, GLOGIN: 3, TOKEN_GEN: 4 },
+    REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
+    PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
+    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, GONLY: 3, SUCCESS: 4 },
+    GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
+    TOKEN_GEN: { FATAL_ERROR: 0, SUCCESS: 1 },
+    TOKEN_AUTH: { INVALID: 0, FATAL_ERROR: 1, SUCCESS: 2 },
+}
+
+function GenerateToken(uId, callback) {
+    var tokenStr = uuidv4();
+    con.query('INSERT INTO s15409471.Tokens (uId, token) VALUES (?, ?);', [uId, tokenStr], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback({ code: CODES.TOKEN_GEN.FATAL_ERROR });
+        }
+        else {
+            console.log('Generated token for uId: "' + uId + '" token: "' + tokenStr + '"');
+            callback({ code: CODES.TOKEN_GEN.SUCCESS, token: tokenStr });
+        }
+    });
+}
+/*GenerateToken('156150544', function(err) {
+    console.log(err)
+});*/
+
+function AuthToken(token, callback) {
+    con.query('SELECT uId FROM s15409471.Tokens WHERE token = ?;', [token], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback({ code: CODES.TOKEN_AUTH.FATAL_ERROR });
+        }
+        else {
+            if (rows.length > 0 && rows[0] != null && rows[0].uId != null) {
+                console.log('Token: "' + token + '" authenticated to be uId: "' + rows[0].uId + '"');
+                callback({ code: CODES.TOKEN_AUTH.SUCCESS, uId: rows[0].uId });
+            }
+            else {
+                console.log('Token: "' + token + '" attempted to authenticate but does not exist in database');
+                callback({ code: CODES.TOKEN_AUTH.INVALID });
+            }
+        }
+    });
+}
+/*AuthToken('b08b4c94-1cb1-4bcb-bc72-6655c4f35f41', function(err) {
+    console.log(err)
+});*/
+
 var server = net.createServer(function(socket) {
     console.log('Connection made');
     socket.on('data', function(data) {
@@ -402,6 +443,9 @@ var server = net.createServer(function(socket) {
                 
                     break;
                 case DATA_TYPES.GET_CHAT:
+                    
+                    break;
+                case DATA_TYPES.TOKEN_AUTH:
                     
                     break;
                 default:
