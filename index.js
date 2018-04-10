@@ -17,12 +17,10 @@ const saltRounds = 10;
 
 const uuidv4 = require('uuid/v4');
 //tokenStr = uuidv4();
-
+ 
 const gal = require('google-auth-library');
 const auth = new gal.GoogleAuth();
 const client = new gal.OAuth2Client();
-
-var DATA_TYPES = { LOGIN: 1, REGISTER: 2, GLOGIN: 3, CHAT: 4, GET_CHAT: 5, TOKEN_AUTH: 7 };
 
 //console.log(JSON.stringify({ type: DATA_TYPES.LOGIN, username: 'Jophes', firstname: 'Joseph', lastname: 'Higgins' }));
 
@@ -70,14 +68,14 @@ function Login(email, password, callback) {
         }
         else {
             if (exists) {
-                con.query('SELECT password FROM s15409471.Users WHERE Users.email = ?;', [email], function(err, rows, fields) {
+                con.query('SELECT uId, password FROM s15409471.Users WHERE Users.email = ?;', [email], function(err, rows, fields) {
                     if (err) {
                         console.log('Failed to fetch password from database!');
                         console.log(err);
                         callback({code: CODES.LOGIN.FATAL_ERROR, message: 'An error occured!'});
                     }
                     else {
-                        if (rows.length > 0 && rows[0].hasOwnProperty('password') && rows[0].password != null) {
+                        if (rows.length > 0 && rows[0].hasOwnProperty('password') && rows[0].password != null && rows[0].uId != null) {
                             bcrypt.compare(password, rows[0].password, function(err, res) {
                                 if (err) {
                                     console.log('Failed to compare hashed string to real string');
@@ -87,7 +85,7 @@ function Login(email, password, callback) {
                                 else {
                                     if (res) {
                                         console.log('User: "' + email + '" logged in');
-                                        callback({code: CODES.LOGIN.SUCCESS});
+                                        callback({code: CODES.LOGIN.SUCCESS, uId: rows[0].uId});
                                     }
                                     else {
                                         console.log('User: "' + email + '" attempted to log in using an incorrect password');
@@ -160,7 +158,7 @@ function Register(email, password, callback) {
                                             }
                                             else {
                                                 console.log('User: "' + email + '" registered');
-                                                callback({code: CODES.REGISTER.SUCCESS});
+                                                callback({code: CODES.REGISTER.SUCCESS, uId: id});
                                             }
                                         });
                                     }
@@ -173,7 +171,7 @@ function Register(email, password, callback) {
                                             }
                                             else {
                                                 console.log('User: "' + email + '" registered');
-                                                callback({code: CODES.REGISTER.SUCCESS});
+                                                callback({code: CODES.REGISTER.SUCCESS, uId: id});
                                             }
                                         });
                                     }
@@ -329,14 +327,24 @@ function GLogin(gId, email, name, callback) {
 
 //console.log(JSON.stringify({type: 0, email: 'test10', password: 'Password1'}));
 
-const CODES = {
-    RESPONDING: { REGISTER: 0, PASSWORD: 1, LOGIN: 2, GLOGIN: 3, TOKEN_GEN: 4 },
-    REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
-    PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
-    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, GONLY: 3, SUCCESS: 4 },
-    GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
-    TOKEN_GEN: { FATAL_ERROR: 0, SUCCESS: 1 },
-    TOKEN_AUTH: { INVALID: 0, FATAL_ERROR: 1, SUCCESS: 2 },
+
+function GetUIdFromGId(gId, callback) {
+    con.query('SELECT uId FROM s15409471.gUsers WHERE gId = ?;', [gId], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(null);
+        }
+        else {
+            if (rows.length > 0 && rows[0] != null && rows[0].uId != null) {
+                console.log('Found uId: "' + rows[0].uId + '" for gId: "' + gId + '"');
+                callback(rows[0].uId);
+            }
+            else {
+                console.log('Failed to find uId for gId: "' + gId + '"');
+                callback(null);
+            }
+        }
+    });
 }
 
 function GenerateToken(uId, callback) {
@@ -344,14 +352,15 @@ function GenerateToken(uId, callback) {
     con.query('INSERT INTO s15409471.Tokens (uId, token) VALUES (?, ?);', [uId, tokenStr], function (err, rows, fields) {
         if (err) {
             console.log(err);
-            callback({ code: CODES.TOKEN_GEN.FATAL_ERROR });
+            callback(null);
         }
         else {
             console.log('Generated token for uId: "' + uId + '" token: "' + tokenStr + '"');
-            callback({ code: CODES.TOKEN_GEN.SUCCESS, token: tokenStr });
+            callback(tokenStr);
         }
     });
 }
+// VALIDATE UID FIRST
 /*GenerateToken('156150544', function(err) {
     console.log(err)
 });*/
@@ -378,7 +387,243 @@ function AuthToken(token, callback) {
     console.log(err)
 });*/
 
-var server = net.createServer(function(socket) {
+// Get user's profile
+function GetProfile(uId, callback) {
+    con.query('SELECT email, IFNULL(name, \'\') as name, picture FROM Users WHERE uId = ?;', [uId], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(null);
+        }
+        else {
+            if (rows.length > 0 && rows[0] != null) {
+                var returnData = {
+                    uId: uId,
+                    email: rows[0].email,
+                    name: rows[0].name,
+                };
+                if (rows[0].picture != null) {
+                    returnData.url = rows[0].picture;
+                }
+                callback(returnData);
+            }
+            else {
+                callback(null);
+            }
+        }
+    });
+}
+/*GetProfile(1467209517, function(data) {
+    if (data == null) {
+        // Error
+    }
+    else {
+        console.log(data);
+    }
+});*/
+
+// Get user's chat history and other users
+function GetChatOverview(uId, callback) {
+    var todaysDate = new Date();
+    //con.query('SELECT * FROM (SELECT uId, email, name, picture, sender, reciever, message, sent, status FROM s15409471.Messages, s15409471.Users WHERE (Messages.sender = ? AND Messages.reciever = Users.uId) OR (Messages.sender = Users.uId AND Messages.reciever = ?) ORDER BY sent DESC) AS Sorted GROUP BY uId ORDER BY sent DESC;', [uId, uId], function (err, rows, fields) {
+    //con.query('SELECT uId, email, name, picture, sender, reciever, IFNULL(message, \'\') AS message, sent, IFNULL(status, 0) AS status FROM s15409471.Users LEFT JOIN s15409471.Messages ON (Users.uId = Messages.sender OR Users.uId = Messages.reciever) WHERE uId != ? AND ((sender = ? OR reciever = ?) OR (isnull(sender) AND isnull(reciever))) ORDER BY sent DESC;', [uId, uId, uId], function (err, rows, fields) {
+    con.query('SELECT * FROM (SELECT * FROM (SELECT uId, email, name, picture, sender, reciever, IFNULL(message, \'\') AS message, sent, IFNULL(status, 0) AS status FROM s15409471.Users LEFT JOIN (SELECT * FROM s15409471.Messages WHERE (sender = ? OR reciever = ?)) AS Messages ON (Users.uId = Messages.sender OR Users.uId = Messages.reciever) WHERE uId != ? ORDER BY sent DESC) AS Sorted GROUP BY uId) AS Sorted ORDER BY sent DESC;', [uId, uId, uId], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(null);
+        }
+        else {
+            var chatOverview = [];
+            for (const i in rows) {
+                if (rows.hasOwnProperty(i)) {
+                    const row = rows[i];
+                    var chatView = {
+                        uId: row.uId,
+                        name: (row.name == null ? row.email : row.name),
+                        sender: (row.sender != null && row.sender == uId),
+                        lastMessage: (row.sender == uId ? 'You: ' : '') + row.message,
+                        status: row.status,
+                    };
+                    
+                    if (row.sent != null) {
+                        var dateTime = new Date(row.sent);
+                        if (dateTime.getFullYear() != todaysDate.getFullYear()) {
+                            chatView.lastTime = dateTime.getFullYear();
+                        }
+                        else if (dateTime.getDate() != todaysDate.getDate()) {
+                            var dayDiff = Math.floor((todaysDate - dateTime) / (1000*60*60*24));
+                            if (dayDiff >= 7) {
+                                var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                chatView.lastTime = dateTime.getDate() + " " + months[dateTime.getMonth()];
+                            }
+                            else {
+                                var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                                chatView.lastTime = days[dateTime.getDay()];
+                            }
+                        }
+                        else {
+                            chatView.lastTime = dateTime.getHours() + ":" + dateTime.getMinutes();
+                        }
+                    }
+                    else {
+                        chatView.lastTime = null;
+                    }
+
+                    if (row.picture != null) {
+                        chatView.url = row.picture;
+                    }
+                    chatOverview.push(chatView);
+                }
+            }
+            callback(chatOverview);
+        }
+    });
+}
+/*GetChatOverview(1467209517, function(data) {
+    if (data == null) {
+        // Error
+    }
+    else {
+        console.log(data);
+    }
+});*/
+
+// Get messages between users
+function GetChat() {
+
+}
+
+function SetProfileName(uId, name, callback) {
+    con.query('UPDATE Users SET name=? WHERE uId=?;', [name, uId], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+        }
+        else {
+            callback();
+        }
+    });
+}
+
+function SetMessagesRead(user, other, callback) {
+    con.query('UPDATE Messages SET status = 1 WHERE Messages.sender = ? AND Messages.reciever = ?;', [user, other], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+        }
+        else {
+            callback();
+        }
+    });
+}
+
+function GetUserMessages(user, other, callback) {
+    con.query('SELECT * FROM (SELECT sender, type, message, sent FROM Messages WHERE (sender = ? AND reciever = ?) or (sender = ? AND reciever = ?) ORDER BY sent DESC LIMIT 0, 50) AS Sorted ORDER BY sent ASC;', [user, other, other, user], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+            callback(null);
+        }
+        else {
+            var userMessages = [];
+            for (const i in rows) {
+                if (rows.hasOwnProperty(i)) {
+                    const row = rows[i];
+                    userMessages.push({
+                        sender: row.sender,
+                        msgType: row.type,
+                        message: row.message,
+                        sent: row.sent
+                    });
+                }
+            }
+            callback(userMessages);
+        }
+    });
+}
+/*GetUserMessages('114815412', '1467209517', function(messages) {
+    if (messages != null) {
+        console.log(messages);
+    }
+});*/
+
+function SendMessage(user, type, other, message, callback) {
+    con.query('INSERT INTO Messages (sender, reciever, message, type) VALUES (?, ?, ?, ?);', [user, other, message, type], function (err, rows, fields) {
+        if (err) {
+            console.log(err);
+        }
+        else {
+            callback();
+        }
+    });
+}
+//SendMessage('114815412', '1467209517', 'This is a test message');
+
+const CODES = {
+    RESPONDING: { REGISTER: 0, PASSWORD: 1, LOGIN: 2, GLOGIN: 3, TOKEN_AUTH: 4, GET_CHATS: 5, GET_MESSAGES: 6, GET_PROFILE: 7 },
+    REGISTER: { EMAIL_EXISTS: 0, WEAK_PASS: 1, FATAL_ERROR: 2, SUCCESS: 3 },
+    PASSWORD: { SHORT: 0, UPPER: 1, NUMBER: 2 },
+    LOGIN: { EMAIL_FAIL: 0, PASS_WRONG: 1, FATAL_ERROR: 2, GONLY: 3, SUCCESS: 4 },
+    GLOGIN: { VERIFY_FAIL: 0, EMAIL_MISMATCH: 1, UNLINKED_EXISTS: 2, GID_EXISTS: 3, FATAL_ERROR: 4, SUCCESS: 5 },
+    TOKEN_AUTH: { INVALID: 0, FATAL_ERROR: 1, SUCCESS: 2 }
+}
+
+var DATA_TYPES = { LOGIN: 1, REGISTER: 2, GLOGIN: 3, CHAT: 4, GET_CHATS: 5, GET_PROFILE: 6, TOKEN_AUTH: 7, UPDATE_PROFILE: 8, GET_MESSAGES: 9, SEND_MESSAGE: 10, MESSAGES_READ: 11 };
+
+var clients = {};
+
+function Client(socket) {
+    var self = this;
+
+    this.uId = null;
+    this.socket = socket;
+
+    self.sendMessages = function(uId, other = null) {
+        if (uId != null) {
+            console.log("Sending " + uId + " message data");
+            if (other != null) {
+                GetUserMessages(uId, other, function(messages) {
+                    if (messages != null) {
+                        //console.log(messages);
+                        socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_MESSAGES, messages: messages, other: other})+"\n");
+                    }
+                });
+            }
+            GetChatOverview(uId, function(data) {
+                if (data == null) {
+                    // Error
+                }
+                else {
+                    //console.log(data);
+                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_CHATS, chats: data})+"\n");
+                }
+            });
+        }
+    }
+
+    self.sendProfile = function(uId) {
+        if (uId != null) {
+            GetProfile(uId, function(data) {
+                if (data == null) {
+                    // Error
+                }
+                else {
+                    //console.log(data);
+                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_PROFILE, profile: data})+"\n");
+                }
+            });
+        }
+    }
+
+    self.setUId = function(uId) {
+        if (uId != null) {
+            if (self.uId != null) {
+                delete clients[self.uId];
+            }
+            self.uId = uId;
+            clients[self.uId] = self;
+            
+            self.sendMessages(uId);
+            self.sendProfile(uId);
+        }
+    };
+    
     console.log('Connection made');
     socket.on('data', function(data) {
         var obj = {};
@@ -395,8 +640,25 @@ var server = net.createServer(function(socket) {
                     if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password')) {
                         Login(obj.email, obj.password, function(err) {
                             err.responding = CODES.RESPONDING.LOGIN;
-                            console.log(err);
-                            socket.write(JSON.stringify(err)+"\n");
+                            if (err.code == CODES.LOGIN.SUCCESS && err.uId != null) {
+                                GenerateToken(err.uId, function(token) {
+                                    if (token == null) {
+                                        err.code = CODES.LOGIN.FATAL_ERROR;
+                                        console.log(err);
+                                        socket.write(JSON.stringify(err)+"\n");
+                                    }
+                                    else {
+                                        err.token = token;
+                                        console.log(err);
+                                        self.setUId(err.uId);
+                                        socket.write(JSON.stringify(err)+"\n");
+                                    }
+                                });
+                            }
+                            else {
+                                console.log(err);
+                                socket.write(JSON.stringify(err)+"\n");
+                            }
                         });
                     }
                     else {
@@ -407,8 +669,26 @@ var server = net.createServer(function(socket) {
                     if (obj.hasOwnProperty('email') && obj.hasOwnProperty('password') && obj.password != null) {
                         Register(obj.email, obj.password, function(err) {
                             err.responding = CODES.RESPONDING.REGISTER;
-                            console.log(err);
-                            socket.write(JSON.stringify(err)+"\n");
+                            if (err.code == CODES.REGISTER.SUCCESS && err.uId != null) {
+                                GenerateToken(err.uId, function(token) {
+                                    if (token == null) {
+                                        err.code = CODES.REGISTER.FATAL_ERROR;
+                                        console.log(err);
+                                        socket.write(JSON.stringify(err)+"\n");
+                                    }
+                                    else {
+                                        err.token = token;
+                                        console.log(err);
+                                        self.setUId(err.uId);
+                                        socket.write(JSON.stringify(err)+"\n");
+                                        self.sendMessages(err.uId);
+                                    }
+                                });
+                            }
+                            else {
+                                console.log(err);
+                                socket.write(JSON.stringify(err)+"\n");
+                            }
                         });
                     }
                     else {
@@ -424,13 +704,40 @@ var server = net.createServer(function(socket) {
                                     //console.log(ticket);
                                     GLogin(ticket.payload.sub, ticket.payload.email, ticket.payload.name, function(err) {
                                         err.responding = CODES.RESPONDING.GLOGIN;
-                                        console.log(err);
-                                        socket.write(JSON.stringify(err)+"\n");
+                                        if (err.code == CODES.GLOGIN.SUCCESS) {
+                                            GetUIdFromGId(ticket.payload.sub, function(uId) {
+                                                if (uId == null) {
+                                                    err.code = CODES.GLOGIN.FATAL_ERROR;
+                                                    console.log(err);
+                                                    socket.write(JSON.stringify(err)+"\n");
+                                                }
+                                                else {
+                                                    GenerateToken(uId, function(token) {
+                                                        if (token == null) {
+                                                            err.code = CODES.GLOGIN.FATAL_ERROR;
+                                                            console.log(err);
+                                                            socket.write(JSON.stringify(err)+"\n");
+                                                        }
+                                                        else {
+                                                            err.token = token;
+                                                            console.log(err);
+                                                            self.setUId(uId);
+                                                            socket.write(JSON.stringify(err)+"\n");
+                                                            self.sendMessages(uId);
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                        }
+                                        else {
+                                            console.log(err);
+                                            socket.write(JSON.stringify(err)+"\n");
+                                        }
                                     });
                                 }
                                 else {
                                     console.log('Email not verified, denied access');
-                                    socket.write(JSON.stringify({respoding: CODES.RESPONDING.GLOGIN, code: CODES.GLOGIN.VERIFY_FAIL, message: 'Google email is not verified, please verify before registering.'})+"\n");
+                                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GLOGIN, code: CODES.GLOGIN.VERIFY_FAIL, message: 'Google email is not verified, please verify before registering.'})+"\n");
                                 }
                             }
                         });
@@ -440,13 +747,131 @@ var server = net.createServer(function(socket) {
                     }
                     break;
                 case DATA_TYPES.CHAT:
-                
-                    break;
-                case DATA_TYPES.GET_CHAT:
                     
+                    break;
+                case DATA_TYPES.GET_CHATS:
+                    if (self.uId != null) {
+                        GetChatOverview(self.uId, function(data) {
+                            if (data == null) {
+                                // Error
+                            }
+                            else {
+                                //console.log(data);
+                                socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_CHATS, chats: data, requested: true})+"\n");
+                            }
+                        });
+                    }
+                    else {
+                        console.log("Recieved get chat message from not logged in session, ignoring");
+                    }
+                    break;
+                case DATA_TYPES.GET_PROFILE:
+                    if (self.uId != null) {
+                        GetProfile(self.uId, function(data) {
+                            if (data == null) {
+                                // Error
+                            }
+                            else {
+                                //console.log(data);
+                                socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_PROFILE, profile: data})+"\n");
+                            }
+                        });
+                    }
+                    else {
+                        console.log("Recieved get chat message from not logged in session, ignoring");
+                    }
                     break;
                 case DATA_TYPES.TOKEN_AUTH:
-                    
+                    if (obj.hasOwnProperty('token')) {
+                        AuthToken(obj.token, function(err) {
+                            err.responding = CODES.RESPONDING.TOKEN_AUTH;
+                            console.log(err)
+                            self.setUId(err.uId);
+                            socket.write(JSON.stringify(err)+"\n");
+                        });
+                    }
+                    else {
+                        console.log('Recieved Token Auth message without token property, ignoring');
+                    }
+                    break;
+                case DATA_TYPES.UPDATE_PROFILE:
+                    if (self.uId != null && obj.hasOwnProperty('name')) {
+                        SetProfileName(self.uId, obj.name, function() {
+                            GetProfile(self.uId, function(data) {
+                                if (data == null) {
+                                    // Error
+                                }
+                                else {
+                                    console.log(data);
+                                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_PROFILE, profile: data})+"\n");
+                                }
+                            });
+                        });
+                    }
+                    else {
+                        console.log("Recieved set profile from not logged in session, ignoring");
+                    }
+                    break;
+                case DATA_TYPES.GET_MESSAGES:
+                    if (self.uId != null && obj.hasOwnProperty('other')) {
+                        GetUserMessages(self.uId, obj.other, function(messages) {
+                            if (messages != null) {
+                                //console.log(messages);
+                                socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_MESSAGES, messages: messages, other: obj.other, requested: true})+"\n");
+
+                                SetMessagesRead(obj.other, self.uId, function() {
+                                    //console.log("MESSAGES READ");
+                                    self.sendMessages(self.uId);
+                                    if (clients[obj.other] != null) {
+                                        clients[obj.other].sendMessages(obj.other);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                    else {
+                        console.log("Recieved GET_MESSAGES from not logged in session, ignoring");
+                    }
+                    break;
+                case DATA_TYPES.SEND_MESSAGE:
+                    if (self.uId != null && obj.hasOwnProperty('other') && obj.hasOwnProperty('message') && obj.hasOwnProperty('msgType')) {
+                        SendMessage(self.uId, obj.msgType, obj.other, obj.message, function() {
+                            GetUserMessages(self.uId, obj.other, function(messages) {
+                                if (messages != null) {
+                                    //console.log(messages);
+                                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_MESSAGES, messages: messages, other: obj.other, requested: true})+"\n");
+                                }
+                            });
+                            GetChatOverview(self.uId, function(data) {
+                                if (data == null) {
+                                    // Error
+                                }
+                                else {
+                                    //console.log(data);
+                                    socket.write(JSON.stringify({responding: CODES.RESPONDING.GET_CHATS, chats: data})+"\n");
+                                }
+                            });
+                            if (clients[obj.other] != null) {
+                                clients[obj.other].sendMessages(obj.other, self.uId);
+                            }
+                        });
+                    }
+                    else {
+                        console.log("Recieved SEND_MESSAGE from not logged in session, ignoring");
+                    }
+                    break;
+                case DATA_TYPES.MESSAGES_READ: 
+                    if (self.uId != null && obj.hasOwnProperty('other')) {
+                        SetMessagesRead(obj.other, self.uId, function() {
+                            self.sendMessages(self.uId);
+                            if (clients[obj.other] != null) {
+                                clients[obj.other].sendMessages(obj.other);
+                            }
+                        });
+                    }
+                    else {
+                        console.log("Recieved MESSAGES_READ from not logged in session, ignoring");
+                    }
                     break;
                 default:
                     console.log('Invalid message type value');
@@ -455,19 +880,35 @@ var server = net.createServer(function(socket) {
         }
     });
 
+    self.destroy = function() {
+        if (self.uId != null) {
+            delete clients[self.uId];
+        }
+    }
+
     socket.on('end', function() {
+        self.destroy();
         console.log('Connected Ended');
     });
+
     socket.on('error', function(err) {
+        self.destroy();
         console.log('Socket error!');
         console.log(err);
         console.log('Possible abrubt closing of socket on remote end, attempting to continue');
     });
+}
+
+var server = net.createServer(function(socket) {
+    var client = new Client(socket);
 });
 
 server.listen(47896);
 
 process.on('SIGINT', function() {
-    console.log('...Stopping');
+    console.log('Stopping...');
     process.exit();
+    console.log("... Stopped");
 });
+
+console.log("... Started");
